@@ -27,24 +27,32 @@ static int port = 80;
 // Working directory
 static char working_dir[STR_BUF];
 
+
 char *get_mime_type(char *name) {
-  char *ext = strrchr(name, '.');
-  if (!ext) return NULL;
-  if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0) return "text/html";
-  if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
-  if (strcmp(ext, ".gif") == 0) return "image/gif";
-  if (strcmp(ext, ".png") == 0) return "image/png";
-  if (strcmp(ext, ".css") == 0) return "text/css";
-  if (strcmp(ext, ".au") == 0) return "audio/basic";
-  if (strcmp(ext, ".wav") == 0) return "audio/wav";
-  if (strcmp(ext, ".avi") == 0) return "video/x-msvideo";
-  if (strcmp(ext, ".mpeg") == 0 || strcmp(ext, ".mpg") == 0) return "video/mpeg";
-  if (strcmp(ext, ".mp3") == 0) return "audio/mpeg";
-  return NULL;
+	char *ext = strrchr(name, '.');
+	if (!ext) return NULL;
+	else if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0) return "text/html";
+	else if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
+	else if (strcmp(ext, ".gif") == 0) return "image/gif";
+	else if (strcmp(ext, ".png") == 0) return "image/png";
+	else if (strcmp(ext, ".css") == 0) return "text/css";
+	else if (strcmp(ext, ".au") == 0) return "audio/basic";
+	else if (strcmp(ext, ".wav") == 0) return "audio/wav";
+	else if (strcmp(ext, ".avi") == 0) return "video/x-msvideo";
+	else if (strcmp(ext, ".mpeg") == 0 || strcmp(ext, ".mpg") == 0) return "video/mpeg";
+	else if (strcmp(ext, ".txt") == 0) return "text/plain";
+	else if (strcmp(ext, ".xml") == 0) return "text/xml";
+	else if (strcmp(ext, ".c") == 0) return "text/plain";
+	else if (strcmp(ext, ".cpp") == 0) return "text/plain";
+	else if (strcmp(ext, ".h") == 0) return "text/plain";
+	else if (strcmp(ext, ".hpp") == 0) return "text/plain";
+	else if (strcmp(ext, ".py") == 0) return "text/plain";
+	else if (strcmp(ext, ".java") == 0) return "text/plain";
+	else if (strcmp(ext, ".csv") == 0) return "text/plain";
+	return NULL;
 }
 
-void send_headers(FILE *f, int status, char *title, char *extra, char *mime, 
-                  int length, time_t date) {
+void send_headers(FILE *f, int status, char *title, char *extra, char *mime, int length, time_t date) {
   time_t now;
   char timebuf[128];
 
@@ -89,83 +97,83 @@ void send_file(FILE *f, char *path, struct stat *statbuf) {
 }
 
 int process(FILE *f) {
-  char buf[STR_BUF];
-  char *method;
-  char path[STR_BUF];
-  char *w_path;
-  char *protocol;
-  struct stat statbuf;
-  char pathbuf[STR_BUF];
-  
-  int len;
+	char buf[STR_BUF];
+	char *method;
+	char path[STR_BUF];
+	char *w_path;
+	char *protocol;
+	struct stat statbuf;
+	char pathbuf[STR_BUF];
 
-  if (!fgets(buf, sizeof(buf), f)) return -1;
-  printf("URL: %s", buf);
+	int len;
 
-  method = strtok(buf, " ");
-  w_path = strtok(NULL, " ");
-  protocol = strtok(NULL, "\r");
-  if (!method || !w_path || !protocol) return -1;
-	snprintf(path, sizeof(path), "%s%s", working_dir, w_path);
+	if (!fgets(buf, sizeof(buf), f)) return -1;
+	printf("URL: %s", buf);
+
+	method = strtok(buf, " ");
+	w_path = strtok(NULL, " ");
+	protocol = strtok(NULL, "\r");
+	if (!method || !w_path || !protocol) return -1;
+	if(w_path[0] == '/' && strlen(w_path)>1)
+		snprintf(path, sizeof(path), "%s%s", working_dir, w_path+1);
+	else
+		snprintf(path, sizeof(path), "%s%s", working_dir, w_path);
 	
+	fseek(f, 0, SEEK_CUR); // Force change of stream direction
+	if (strcasecmp(method, "GET") != 0) {
+		send_error(f, 501, "Not supported", NULL, "Method is not supported.");
+	} else if (stat(path, &statbuf) < 0) {
+		send_error(f, 404, "Not Found", NULL, "File not found.");
+	} else if (S_ISDIR(statbuf.st_mode)) {
+		len = strlen(path);
+	if (len == 0 || path[len - 1] != '/') {
+		snprintf(pathbuf, sizeof(pathbuf), "Location: %s/", path);
+		send_error(f, 302, "Found", pathbuf, "Directories must end with a slash.");
+	} else {
+		snprintf(pathbuf, sizeof(pathbuf), "%sindex.html", path);
+		if (stat(pathbuf, &statbuf) >= 0) {
+			send_file(f, pathbuf, &statbuf);
+		} else {
+			DIR *dir;
+			struct dirent *de;
 
-  fseek(f, 0, SEEK_CUR); // Force change of stream direction
+			send_headers(f, 200, "OK", NULL, "text/html", -1, statbuf.st_mtime);
+			fprintf(f, "<HTML><HEAD><TITLE>Index of %s</TITLE></HEAD>\r\n<BODY>", path);
+			fprintf(f, "<H4>Index of %s</H4>\r\n<PRE>\n", path);
+			fprintf(f, "Name                             Last Modified              Size\r\n");
+			fprintf(f, "<HR>\r\n");
+			if (len > 1) fprintf(f, "<A HREF=\"..\">..</A>\r\n");
 
-  if (strcasecmp(method, "GET") != 0) {
-    send_error(f, 501, "Not supported", NULL, "Method is not supported.");
-  } else if (stat(path, &statbuf) < 0) {
-    send_error(f, 404, "Not Found", NULL, "File not found.");
-  } else if (S_ISDIR(statbuf.st_mode)) {
-    len = strlen(path);
-    if (len == 0 || path[len - 1] != '/') {
-      snprintf(pathbuf, sizeof(pathbuf), "Location: %s/", path);
-      send_error(f, 302, "Found", pathbuf, "Directories must end with a slash.");
-    } else {
-      snprintf(pathbuf, sizeof(pathbuf), "%sindex.html", path);
-      if (stat(pathbuf, &statbuf) >= 0) {
-        send_file(f, pathbuf, &statbuf);
-      } else {
-        DIR *dir;
-        struct dirent *de;
+			dir = opendir(path);
+			while ((de = readdir(dir)) != NULL) {
+				char timebuf[32];
+				struct tm *tm;
 
-        send_headers(f, 200, "OK", NULL, "text/html", -1, statbuf.st_mtime);
-        fprintf(f, "<HTML><HEAD><TITLE>Index of %s</TITLE></HEAD>\r\n<BODY>", path);
-        fprintf(f, "<H4>Index of %s</H4>\r\n<PRE>\n", path);
-        fprintf(f, "Name                             Last Modified              Size\r\n");
-        fprintf(f, "<HR>\r\n");
-        if (len > 1) fprintf(f, "<A HREF=\"..\">..</A>\r\n");
+				strcpy(pathbuf, path);
+				strcat(pathbuf, de->d_name);
 
-        dir = opendir(path);
-        while ((de = readdir(dir)) != NULL) {
-          char timebuf[32];
-          struct tm *tm;
+				stat(pathbuf, &statbuf);
+				tm = gmtime(&statbuf.st_mtime);
+				strftime(timebuf, sizeof(timebuf), "%d-%b-%Y %H:%M:%S", tm);
 
-          strcpy(pathbuf, path);
-          strcat(pathbuf, de->d_name);
+				fprintf(f, "<A HREF=\"%s%s\">", de->d_name, S_ISDIR(statbuf.st_mode) ? "/" : "");
+				fprintf(f, "%s%s", de->d_name, S_ISDIR(statbuf.st_mode) ? "/</A>" : "</A> ");
+				if (strlen(de->d_name) < 32) fprintf(f, "%*s", 32 - (int)strlen(de->d_name), "");
+				if (S_ISDIR(statbuf.st_mode)) {
+					fprintf(f, "%s\r\n", timebuf);
+				} else {
+					fprintf(f, "%s %10d\r\n", timebuf, (int)statbuf.st_size);
+				}
+			}
+			closedir(dir);
+			fprintf(f, "</PRE>\r\n<HR>\r\n<ADDRESS>%s</ADDRESS>\r\n</BODY></HTML>\r\n", SERVER);
+			}
+		}
+	} else {
+		send_file(f, path, &statbuf);
+	}
 
-          stat(pathbuf, &statbuf);
-          tm = gmtime(&statbuf.st_mtime);
-          strftime(timebuf, sizeof(timebuf), "%d-%b-%Y %H:%M:%S", tm);
-
-          fprintf(f, "<A HREF=\"%s%s\">", de->d_name, S_ISDIR(statbuf.st_mode) ? "/" : "");
-          fprintf(f, "%s%s", de->d_name, S_ISDIR(statbuf.st_mode) ? "/</A>" : "</A> ");
-          if (strlen(de->d_name) < 32) fprintf(f, "%*s", 32 - (int)strlen(de->d_name), "");
-          if (S_ISDIR(statbuf.st_mode)) {
-            fprintf(f, "%s\r\n", timebuf);
-          } else {
-            fprintf(f, "%s %10d\r\n", timebuf, (int)statbuf.st_size);
-          }
-        }
-        closedir(dir);
-
-        fprintf(f, "</PRE>\r\n<HR>\r\n<ADDRESS>%s</ADDRESS>\r\n</BODY></HTML>\r\n", SERVER);
-      }
-    }
-  } else {
-    send_file(f, path, &statbuf);
-  }
-
-  return 0;
+	return 0;
 }
 
 int main(int argc, char *argv[]) {
