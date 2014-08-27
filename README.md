@@ -4,6 +4,8 @@ nanoHttp
 Really simple, small HTTP server.
 Designed to act as a primitive HTTP server on my android devices.
 
+For Android-Instructions, visit the Wiki: https://github.com/grisu48/nanoHttp/wiki/Android
+
 Inspiration and original source
 ===============================
 
