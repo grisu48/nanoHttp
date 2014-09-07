@@ -5,8 +5,10 @@
 //
 
 
+/* ==== GLOBAL DEFINES ====================================================== */
 // Multi-threading on
 #define _NANOHTTP_THREADING 1
+
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +17,7 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <netinet/in.h>
@@ -24,7 +27,12 @@
 #include <pthread.h>
 #endif
 
+/* ==== GLOBAL SETTINGS ===================================================== */
 #define VERSION "0.2"
+// Maximum number of threads
+#if _NANOHTTP_THREADING == 1
+	#define THREAD_COUNT 10
+#endif
 
 #define SERVER "webserver/1.0"
 #define PROTOCOL "HTTP/1.0"
@@ -35,11 +43,17 @@
 static int port = 80;
 // Working directory
 static char working_dir[STR_BUF];
+// Server socket
+static int sock;
 
+#if _NANOHTTP_THREADING == 1
 struct {
 	int fd;
+	int thread;
 } typedef thread_args;
 
+volatile pthread_t threads[THREAD_COUNT];
+#endif
 
 char *get_mime_type(char *name) {
 	char *ext = strrchr(name, '.');
@@ -93,20 +107,38 @@ void send_error(FILE *f, int status, char *title, char *extra, char *text) {
   fprintf(f, "</BODY></HTML>\r\n");
 }
 
-void send_file(FILE *f, char *path, struct stat *statbuf) {
+
+int send_file(FILE *f, char *path, struct stat *statbuf) {
   char data[4096];
   int n;
 
   FILE *file = fopen(path, "r");
   if (!file) {
     send_error(f, 403, "Forbidden", NULL, "Access denied.");
+    return -403;
   } else {
-    int length = S_ISREG(statbuf->st_mode) ? statbuf->st_size : -1;
+    size_t length = S_ISREG(statbuf->st_mode) ? statbuf->st_size : -1;
+    size_t sent = 0;
     send_headers(f, 200, "OK", NULL, get_mime_type(path), length, statbuf->st_mtime);
 
-    while ((n = fread(data, 1, sizeof(data), file)) > 0) fwrite(data, 1, n, f);
+	printf("Sending file to client ... (%ld bytes) \n", length);
+    while ((n = fread(data, sizeof(char), sizeof(data)/sizeof(char), file)) > 0) {
+    	size_t b_sent = fwrite(data, sizeof(char), n, f);
+    	fflush(f);
+    	if(b_sent <= 0) break;
+    	else sent += b_sent;
+    }
     fclose(file);
+    
+    if(sent == length) {
+	    return 0;
+	} else {
+		printf("Incomplete sent (%ld of %ld bytes)\n", sent, length);
+		return -1;
+	}
   }
+  
+  return -2;
 }
 
 /* Process a request on the given stream */
@@ -122,7 +154,7 @@ int process(FILE *f) {
 	int len;
 
 	if (!fgets(buf, sizeof(buf), f)) return -1;
-	printf("URL: %s", buf);
+	printf("GET: %s", buf);
 
 	method = strtok(buf, " ");
 	w_path = strtok(NULL, " ");
@@ -136,53 +168,58 @@ int process(FILE *f) {
 	fseek(f, 0, SEEK_CUR); // Force change of stream direction
 	if (strcasecmp(method, "GET") != 0) {
 		send_error(f, 501, "Not supported", NULL, "Method is not supported.");
+		fprintf(stderr, "Method '%s' not supported \n", method);
+		return -2;
 	} else if (stat(path, &statbuf) < 0) {
 		send_error(f, 404, "Not Found", NULL, "File not found.");
+		fprintf(stderr, "File '%s' not found \n", path);
+		return -404;
 	} else if (S_ISDIR(statbuf.st_mode)) {
 		len = strlen(path);
-	if (len == 0 || path[len - 1] != '/') {
-		snprintf(pathbuf, sizeof(pathbuf), "Location: %s/", path);
-		send_error(f, 302, "Found", pathbuf, "Directories must end with a slash.");
-	} else {
-		snprintf(pathbuf, sizeof(pathbuf), "%sindex.html", path);
-		if (stat(pathbuf, &statbuf) >= 0) {
-			send_file(f, pathbuf, &statbuf);
+		if (len == 0 || path[len - 1] != '/') {
+			snprintf(pathbuf, sizeof(pathbuf), "Location: %s/", path);
+			send_error(f, 302, "Found", pathbuf, "Directories must end with a slash.");
 		} else {
-			DIR *dir;
-			struct dirent *de;
+			snprintf(pathbuf, sizeof(pathbuf), "%sindex.html", path);
+			if (stat(pathbuf, &statbuf) >= 0) {
+				int res = send_file(f, pathbuf, &statbuf);
+				if(res != 0) return res;
+			} else {
+				DIR *dir;
+				struct dirent *de;
 
-			send_headers(f, 200, "OK", NULL, "text/html", -1, statbuf.st_mtime);
-			fprintf(f, "<HTML><HEAD><TITLE>Index of %s</TITLE></HEAD>\r\n<BODY>", path);
-			fprintf(f, "<H4>Index of %s</H4>\r\n<PRE>\n", path);
-			fprintf(f, "Name                             Last Modified              Size\r\n");
-			fprintf(f, "<HR>\r\n");
-			if (len > 1) fprintf(f, "<A HREF=\"..\">..</A>\r\n");
+				send_headers(f, 200, "OK", NULL, "text/html", -1, statbuf.st_mtime);
+				fprintf(f, "<HTML><HEAD><TITLE>Index of %s</TITLE></HEAD>\r\n<BODY>", path);
+				fprintf(f, "<H4>Index of %s</H4>\r\n<PRE>\n", path);
+				fprintf(f, "Name                             Last Modified              Size\r\n");
+				fprintf(f, "<HR>\r\n");
+				if (len > 1) fprintf(f, "<A HREF=\"..\">..</A>\r\n");
 
-			dir = opendir(path);
-			while ((de = readdir(dir)) != NULL) {
-				char timebuf[32];
-				struct tm *tm;
+				dir = opendir(path);
+				while ((de = readdir(dir)) != NULL) {
+					char timebuf[32];
+					struct tm *tm;
 
-				strcpy(pathbuf, path);
-				strcat(pathbuf, de->d_name);
+					strcpy(pathbuf, path);
+					strcat(pathbuf, de->d_name);
 
-				stat(pathbuf, &statbuf);
-				tm = gmtime(&statbuf.st_mtime);
-				strftime(timebuf, sizeof(timebuf), "%d-%b-%Y %H:%M:%S", tm);
+					stat(pathbuf, &statbuf);
+					tm = gmtime(&statbuf.st_mtime);
+					strftime(timebuf, sizeof(timebuf), "%d-%b-%Y %H:%M:%S", tm);
 
-				fprintf(f, "<A HREF=\"%s%s\">", de->d_name, S_ISDIR(statbuf.st_mode) ? "/" : "");
-				fprintf(f, "%s%s", de->d_name, S_ISDIR(statbuf.st_mode) ? "/</A>" : "</A> ");
-				if (strlen(de->d_name) < 32) fprintf(f, "%*s", 32 - (int)strlen(de->d_name), "");
-				if (S_ISDIR(statbuf.st_mode)) {
-					fprintf(f, "%s\r\n", timebuf);
-				} else {
-					fprintf(f, "%s %10d\r\n", timebuf, (int)statbuf.st_size);
+					fprintf(f, "<A HREF=\"%s%s\">", de->d_name, S_ISDIR(statbuf.st_mode) ? "/" : "");
+					fprintf(f, "%s%s", de->d_name, S_ISDIR(statbuf.st_mode) ? "/</A>" : "</A> ");
+					if (strlen(de->d_name) < 32) fprintf(f, "%*s", 32 - (int)strlen(de->d_name), "");
+					if (S_ISDIR(statbuf.st_mode)) {
+						fprintf(f, "%s\r\n", timebuf);
+					} else {
+						fprintf(f, "%s %10d\r\n", timebuf, (int)statbuf.st_size);
+					}
+				}
+				closedir(dir);
+				fprintf(f, "</PRE>\r\n<HR>\r\n<ADDRESS>%s</ADDRESS>\r\n</BODY></HTML>\r\n", SERVER);
 				}
 			}
-			closedir(dir);
-			fprintf(f, "</PRE>\r\n<HR>\r\n<ADDRESS>%s</ADDRESS>\r\n</BODY></HTML>\r\n", SERVER);
-			}
-		}
 	} else {
 		send_file(f, path, &statbuf);
 	}
@@ -195,21 +232,67 @@ int process(FILE *f) {
 /* Process a socket */
 void process_thread(thread_args *args) {
 	FILE *file;
-	int fd;
+	int fd, thread;
+	int res;
 	
 	fd = args->fd;
+	thread = args->thread;
 	free(args);
 	
+	threads[thread] = pthread_self();
 	file = fdopen(fd, "a+");
-    process(file);
+    res = process(file);
     fclose(file);
     close(fd);
+    threads[thread] = 0;
+    
+    if(res != 0) 
+    	printf("Returned status %d \n", res);
+    
 }
 #endif
 
 
+static void sig_handler(int signo) {
+	switch(signo) {
+	case SIGINT:
+		fprintf(stderr, "SIGINT received\n");
+		exit(EXIT_FAILURE);
+		break;
+	case SIGUSR1:
+		fprintf(stderr, "SIGUSR1 received\n");
+		exit(EXIT_FAILURE);
+		break;
+	case SIGUSR2:
+		fprintf(stderr, "SIGUSR2 received\n");
+		exit(EXIT_FAILURE);
+		break;
+	case SIGALRM:
+		fprintf(stderr, "SIGALRM received\n");
+		exit(EXIT_FAILURE);
+		break;
+	case SIGSEGV:
+		fprintf(stderr, "SIGSEGV received\n");
+		exit(EXIT_FAILURE);
+		break;
+	}
+}
+
+void cleanup(void) {
+	if(sock > 0) close(sock);
+	sock = 0;
+#if _NANOHTTP_THREADING == 1
+	for(int i=0;i<THREAD_COUNT;i++) {
+		pthread_t pid = threads[i];
+		if(pid <= 0) continue;
+		
+		// pthread_kill(pid, SIGUSR1);
+		pthread_cancel(pid);
+	}
+#endif
+}
+
 int main(int argc, char *argv[]) {
-  int sock;
   struct sockaddr_in sin;
 
 	if(getcwd(working_dir, sizeof(working_dir)) == NULL) {
@@ -219,7 +302,7 @@ int main(int argc, char *argv[]) {
 
 	// Parse program arguments
 	for(int i=1;i<argc;i++) {
-		char* arg = argv[1];
+		char* arg = argv[i];
 		bool is_last = i >= argc-1;
 		
 		if(!strcmp("-h", arg) || !strcmp("--help",arg)) {
@@ -254,6 +337,7 @@ int main(int argc, char *argv[]) {
 				len = strlen(arg);
 				if(len > sizeof(working_dir)-1) len = sizeof(working_dir)-1;
 				strncpy(working_dir, arg, len);
+				working_dir[len] = '\0';
 				
 			}
 			
@@ -274,6 +358,19 @@ int main(int argc, char *argv[]) {
 	}
 	printf("Working directory: %s\n", working_dir);
 	
+	
+	// Set signals
+	signal(SIGINT, sig_handler);
+	signal(SIGUSR1, sig_handler);
+	signal(SIGUSR2, sig_handler);
+	signal(SIGALRM, sig_handler);
+	signal(SIGSEGV, sig_handler);
+	atexit(cleanup);
+	
+#if _NANOHTTP_THREADING == 1
+	for(int i=0;i<THREAD_COUNT;i++) 
+		threads[i] = 0;
+#endif
 	
 
   sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -312,14 +409,31 @@ int main(int argc, char *argv[]) {
 			close(s);
 			continue;
 		} else {
+			// Get a thread that is not occupied
+			int x = -1;
+			
+			// XXX: Busy waiting possible :-(
+			while(x < 0) {
+				for(int i=0;i<THREAD_COUNT;i++) {
+					if(threads[i] == 0) {
+						x = i; break;
+					}
+				}
+			}
+			threads[x] = -1;		// Occupied but not yet populated.
+			
 			// Create Thread
 			args->fd = s;
+			args->thread = x;
 			int res = pthread_create(&thread, NULL, (void * (*)(void *))process_thread, args);
 			if(res < 0) {
 				fprintf(stderr, "Error creating thread: %s \n", strerror(errno));
 				close(s);
 				free(args);
 				continue;
+			} else {
+				// Also set in the thread to ensure data consistency
+				threads[x] = thread;
 			}
 		}
 #else
