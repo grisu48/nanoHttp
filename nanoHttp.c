@@ -4,6 +4,10 @@
 // Simple HTTP server sample for sanos
 //
 
+
+// Multi-threading on
+#define _NANOHTTP_THREADING 1
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -11,11 +15,16 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
-#include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <time.h>
+#if _NANOHTTP_THREADING == 1
+#include <pthread.h>
+#endif
+
+#define VERSION "0.2"
 
 #define SERVER "webserver/1.0"
 #define PROTOCOL "HTTP/1.0"
@@ -26,6 +35,10 @@
 static int port = 80;
 // Working directory
 static char working_dir[STR_BUF];
+
+struct {
+	int fd;
+} typedef thread_args;
 
 
 char *get_mime_type(char *name) {
@@ -96,6 +109,7 @@ void send_file(FILE *f, char *path, struct stat *statbuf) {
   }
 }
 
+/* Process a request on the given stream */
 int process(FILE *f) {
 	char buf[STR_BUF];
 	char *method;
@@ -176,6 +190,24 @@ int process(FILE *f) {
 	return 0;
 }
 
+
+#if _NANOHTTP_THREADING == 1
+/* Process a socket */
+void process_thread(thread_args *args) {
+	FILE *file;
+	int fd;
+	
+	fd = args->fd;
+	free(args);
+	
+	file = fdopen(fd, "a+");
+    process(file);
+    fclose(file);
+    close(fd);
+}
+#endif
+
+
 int main(int argc, char *argv[]) {
   int sock;
   struct sockaddr_in sin;
@@ -189,7 +221,24 @@ int main(int argc, char *argv[]) {
 	for(int i=1;i<argc;i++) {
 		char* arg = argv[1];
 		bool is_last = i >= argc-1;
-		if(!strcmp("-p", arg) || !strcmp("--port",arg)) {
+		
+		if(!strcmp("-h", arg) || !strcmp("--help",arg)) {
+			printf("nanoHttp v %s ", VERSION);
+#if _NANOHTTP_THREADING == 1
+			printf(" (multithread)");
+#endif
+			printf("\n");
+			
+			printf("  Usage: %s [OPTIONS]\n", argv[0]);
+			printf("OPTIONS:\n");
+			printf("\t-h  --help          Print this help message\n");
+			printf("\t-p  --port PORT     Define port\n");
+			printf("\t-w  --cwd PATH      Define working directory\n");
+			printf("\n2014, Felix Niederwanger\n");
+			
+			
+			return EXIT_SUCCESS;
+		} else if(!strcmp("-p", arg) || !strcmp("--port",arg)) {
 			if(is_last) {
 				fprintf(stderr, "Missing argument: port\n");
 				return EXIT_FAILURE;
@@ -208,6 +257,8 @@ int main(int argc, char *argv[]) {
 				
 			}
 			
+		} else {
+			fprintf(stderr, "WARN: Unknown argument: %s \n", arg);
 		}
 	}
 	
@@ -247,20 +298,43 @@ int main(int argc, char *argv[]) {
 
   while (1) {
     int s;
-    FILE *f;
 
     s = accept(sock, NULL, NULL);
     if (s < 0) {
 		fprintf(stderr, "Error accepting new client: %s \n", strerror(errno));
-		break;
-	}
-
-    f = fdopen(s, "a+");
-    process(f);
-    fclose(f);
+		break; 
+	} else {
+#if _NANOHTTP_THREADING == 1
+		pthread_t thread = 0;
+		thread_args *args = (thread_args*)malloc(sizeof(thread_args));
+		if(args == NULL) {
+			fprintf(stderr, "Error allocating memory for thread: %s \n", strerror(errno));
+			close(s);
+			continue;
+		} else {
+			// Create Thread
+			args->fd = s;
+			int res = pthread_create(&thread, NULL, (void * (*)(void *))process_thread, args);
+			if(res < 0) {
+				fprintf(stderr, "Error creating thread: %s \n", strerror(errno));
+				close(s);
+				free(args);
+				continue;
+			}
+		}
+#else
+		// Directly process request (single-thread)
+		FILE *file;
+		file = fdopen(s, "a+");
+		process(file);
+		fclose(file);
+		close(s);
+#endif
+	  }
   }
 
   close(sock);
   printf("Bye\n");
   return 0;
 }
+
