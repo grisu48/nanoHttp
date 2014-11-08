@@ -9,7 +9,6 @@
 // Multi-threading on
 #define _NANOHTTP_THREADING 1
 
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -287,7 +286,7 @@ void cleanup(void) {
 		if(pid <= 0) continue;
 		
 		// pthread_kill(pid, SIGUSR1);
-		pthread_cancel(pid);
+		pthread_kill(pid, SIGINT);
 	}
 #endif
 }

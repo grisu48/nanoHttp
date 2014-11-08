@@ -1,7 +1,7 @@
 
 #Use this to compile for android
-#CC=arm-linux-androideabi-gcc
-CC=gcc
+CC=arm-linux-androideabi-gcc
+#CC=gcc
 
 # Flags and settings
 CC_FLAGS=-static -Wall -pedantic -std=c99
