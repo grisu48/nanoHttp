@@ -25,7 +25,7 @@
 #endif
 
 /* ==== GLOBAL SETTINGS ===================================================== */
-#define VERSION "0.2"
+#define VERSION "0.3"
 
 #define SERVER "nanoHttp/1.1"
 #define PROTOCOL "HTTP/1.0"
@@ -138,8 +138,16 @@ int send_file(int fd, char *path, struct stat *statbuf) {
 		printf("Sending file to client ... (%ld bytes) \n", length);
 		while ((n = read(file_fd, data, sizeof(char) * READ_BUF)) > 0) {
 			size_t b_sent = write(fd, data, sizeof(char) * n);
-			if(b_sent <= 0) break;
-			else sent += b_sent;
+			if((int)b_sent < 0) {
+				if(errno == 0)
+					fprintf(stderr, "Error writing to socket: Unknown error\n");
+				else
+					fprintf(stderr, "Error writing to socket: %s \n", strerror(errno));
+				break;
+			} else if((int)b_sent == 0) 
+				break;
+			else
+				sent += b_sent;
     }
     close(file_fd);
     
