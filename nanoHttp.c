@@ -32,7 +32,7 @@
 #define RFC1123FMT "%a, %d %b %Y %H:%M:%S GMT"
 
 // Default port
-static int port = 80;
+static int port = DEFAULT_PORT;
 // Working directory
 static char working_dir[STR_BUF];
 // Server socket
@@ -53,6 +53,34 @@ static ssize_t strwrite(int fd, char* str) {
 	if(fd < 0 || len <= 0) return 0;
 	return write(fd, str, len);
 }
+
+static char* removeDoubleSlash(char* buf) {
+	const size_t len = strlen(buf)-1;
+	for(size_t i = 0; i < len;i++) {
+		if(buf[i] == '/' && buf[i+1] == '/') {
+			// Shift
+			for(size_t j = i;j<len;j++)
+				buf[j] = buf[j+1];
+		}
+	}
+	return buf;
+}
+
+static size_t fdgets(int fd, char* buf, int size) {
+	size_t i = 0;
+	char c;
+	
+	while(i < size) {
+		if (read(fd, &c, 1) <= 0) break;
+		if(c == EOF) break;
+		buf[i++] = c;
+		if (c == '\n') break;
+	}
+	
+	return i;
+}
+
+
 
 static char *get_mime_type(char *name) {
 	char *ext = strrchr(name, '.');
@@ -162,20 +190,6 @@ int send_file(int fd, char *path, struct stat *statbuf) {
   return -2;
 }
 
-static size_t fdgets(int fd, char* buf, int size) {
-	size_t i = 0;
-	char c;
-	
-	while(i < size) {
-		if (read(fd, &c, 1) <= 0) break;
-		if(c == EOF) break;
-		buf[i++] = c;
-		if (c == '\n') break;
-	}
-	
-	return i;
-}
-
 /* Process a request on the given stream */
 int process(int fd) {
 	char buf[STR_BUF];
@@ -190,6 +204,7 @@ int process(int fd) {
 	
 	
 	if (fdgets(fd, buf, sizeof(buf)) <= 0) return -1;
+	removeDoubleSlash(buf);
 	printf("GET: %s", buf);
 
 	method = strtok(buf, " ");

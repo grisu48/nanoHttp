@@ -21,7 +21,6 @@
 #endif
 
 
-
-/* Function prototypes */
-static char *get_mime_type(char *name);
+// Default port
+#define DEFAULT_PORT 80
 
