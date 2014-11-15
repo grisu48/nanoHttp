@@ -4,7 +4,7 @@
 CC=gcc
 
 # Flags and settings
-CC_FLAGS=-static -Wall -pedantic -std=c99
+CC_FLAGS=-static -Wall -pedantic -std=c99 -O3
 LIBS=-pthread
 OBJS=
 CC_ENV=-D_POSIX_SOURCE

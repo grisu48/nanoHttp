@@ -25,6 +25,10 @@ To compile it, modify the Makefile: Replace CC with
 
 and make sure "-static" is set in "CC_FLAGS" (Makefile).
 
+
+
+For detailed Install instructions see the Wiki: https://github.com/grisu48/nanoHttp/wiki/Android or checkout the Android-INSTALL file in the android/ folder
+
 Multi-Threading
 ===============
 

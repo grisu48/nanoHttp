@@ -43,7 +43,7 @@ With the following contents:
 
 #!/system/bin/sh
 umask 077
-/system/bin/nanoHttp -w /storage/sdcard1/www/
+/system/bin/nanoHttp -D -w /storage/sdcard1/www/
 
 
 Replace /storage/sdcard1/www/ with the directory where your WWW contents are located.
@@ -54,7 +54,7 @@ Execute the following to have all together:
 
 echo "#!/system/bin/sh" > /data/local/userinit.d/99nanoHttp
 echo "umask 077" >> /data/local/userinit.d/99nanoHttp
-echo "/system/bin/nanoHttp -w /storage/sdcard1/www/" >> /data/local/userinit.d/99nanoHttp
+echo "/system/bin/nanoHttp -w -D /storage/sdcard1/www/" >> /data/local/userinit.d/99nanoHttp
 chmod 755 /data/local/userinit.d/99nanoHttp
 
 

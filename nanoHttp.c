@@ -365,7 +365,8 @@ void cleanup(void) {
 }
 
 int main(int argc, char *argv[]) {
-  struct sockaddr_in sin;
+	struct sockaddr_in sin;
+	bool daemon = false;
 
 	if(getcwd(working_dir, sizeof(working_dir)) == NULL) {
 		fprintf(stderr, "WARN: error getting working directory\n");
@@ -387,12 +388,15 @@ int main(int argc, char *argv[]) {
 			printf("  Usage: %s [OPTIONS]\n", argv[0]);
 			printf("OPTIONS:\n");
 			printf("\t-h  --help          Print this help message\n");
+			printf("\t-D  --daemon        Run as daemon (fork)\n");
 			printf("\t-p  --port PORT     Define port\n");
 			printf("\t-w  --cwd PATH      Define working directory\n");
 			printf("\n2014, Felix Niederwanger\n");
 			
 			
 			return EXIT_SUCCESS;
+		} else if(!strcmp("-D", arg) || !strcmp("--daemon",arg)) {
+			daemon = true;
 		} else if(!strcmp("-p", arg) || !strcmp("--port",arg)) {
 			if(is_last) {
 				fprintf(stderr, "Missing argument: port\n");
@@ -415,6 +419,27 @@ int main(int argc, char *argv[]) {
 			
 		} else {
 			fprintf(stderr, "WARN: Unknown argument: %s \n", arg);
+		}
+	}
+	
+	// Run as daemon, if needed to
+	if(daemon == true) {
+		pid_t daemon_pid = fork();
+		if(daemon_pid < 0) {
+			fprintf(stderr, "Cannot fork: %s \n", strerror(errno));
+			return EXIT_FAILURE;
+		}
+		
+		if(daemon_pid == 0) {
+			// Child process continues work as daemon
+			if(setsid() < 0) {
+				fprintf(stderr, "Failed to set new session id: %s\n", strerror(errno));
+				return EXIT_FAILURE;
+			}
+		} else {
+			// I am the parent process. My work here is done
+			printf("Daemon forked.\n");
+			return EXIT_SUCCESS;
 		}
 	}
 	
