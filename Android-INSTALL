@@ -1,0 +1,60 @@
+  nanoHttp INSTALLATION GUIDES  
+================================
+
+DISCLAIMER
+
+This is an advanced tool for experienced Android users.
+I consider it as a software experiment. Please do NOT use this program in a productive system!
+
+
+
+What you need
+-------------
+
+- Android device
+- Rooted (The device must be rooted)
+- ADB bridge
+- Knowledge about a shell and the Android system
+
+How to install the program
+--------------------------
+
+Copy the program on your device into a directory where you can execute it.
+Usually the SD-Card (Internal and External) are marked as Non-Executable. You won't be able to run the program from that location.
+
+Copy the binary into /system/bin. Keep in mind to make the mount-point writeable.
+Then copy the binary into /system/bin
+
+# mount -o remount,rw /system
+# cp nanoHttp /system/bin/                                            
+# mount -o remount,ro /system
+
+Done :-)
+
+
+
+Run the program at startup
+--------------------------
+
+Create the file '99nanoHttp' in the directory /data/local/userinit.d
+# /data/local/userinit.d/99nanoHttp
+
+With the following contents:
+
+#!/system/bin/sh
+umask 077
+/system/bin/nanoHttp -w /storage/sdcard1/www/
+
+
+Replace /storage/sdcard1/www/ with the directory where your WWW contents are located.
+
+Don't forget to make /data/local/userinit.d/99nanoHttp executable!
+
+Execute the following to have all together:
+
+echo "#!/system/bin/sh" > /data/local/userinit.d/99nanoHttp
+echo "umask 077" >> /data/local/userinit.d/99nanoHttp
+echo "/system/bin/nanoHttp -w /storage/sdcard1/www/" >> /data/local/userinit.d/99nanoHttp
+chmod 755 /data/local/userinit.d/99nanoHttp
+
+
