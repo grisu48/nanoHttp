@@ -4,10 +4,7 @@
 // Simple HTTP server sample for sanos
 //
 
-
-/* ==== GLOBAL DEFINES ====================================================== */
-// Multi-threading on
-#define _NANOHTTP_THREADING 1
+#include "nanoHttp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,21 +19,17 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <time.h>
+#include <fcntl.h>
 #if _NANOHTTP_THREADING == 1
 #include <pthread.h>
 #endif
 
 /* ==== GLOBAL SETTINGS ===================================================== */
 #define VERSION "0.2"
-// Maximum number of threads
-#if _NANOHTTP_THREADING == 1
-	#define THREAD_COUNT 10
-#endif
 
-#define SERVER "webserver/1.0"
+#define SERVER "nanoHttp/1.1"
 #define PROTOCOL "HTTP/1.0"
 #define RFC1123FMT "%a, %d %b %Y %H:%M:%S GMT"
-#define STR_BUF 4*1024
 
 // Default port
 static int port = 80;
@@ -54,7 +47,14 @@ struct {
 volatile pthread_t threads[THREAD_COUNT];
 #endif
 
-char *get_mime_type(char *name) {
+
+static ssize_t strwrite(int fd, char* str) {
+	size_t len = strlen(str);
+	if(fd < 0 || len <= 0) return 0;
+	return write(fd, str, len);
+}
+
+static char *get_mime_type(char *name) {
 	char *ext = strrchr(name, '.');
 	if (!ext) return NULL;
 	else if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0) return "text/html";
@@ -78,56 +78,70 @@ char *get_mime_type(char *name) {
 	return NULL;
 }
 
-void send_headers(FILE *f, int status, char *title, char *extra, char *mime, int length, time_t date) {
-  time_t now;
-  char timebuf[128];
-
-  fprintf(f, "%s %d %s\r\n", PROTOCOL, status, title);
-  fprintf(f, "Server: %s\r\n", SERVER);
-  now = time(NULL);
-  strftime(timebuf, sizeof(timebuf), RFC1123FMT, gmtime(&now));
-  fprintf(f, "Date: %s\r\n", timebuf);
-  if (extra) fprintf(f, "%s\r\n", extra);
-  if (mime) fprintf(f, "Content-Type: %s\r\n", mime);
-  if (length >= 0) fprintf(f, "Content-Length: %d\r\n", length);
-  if (date != -1) {
-    strftime(timebuf, sizeof(timebuf), RFC1123FMT, gmtime(&date));
-    fprintf(f, "Last-Modified: %s\r\n", timebuf);
-  }
-  fprintf(f, "Connection: close\r\n");
-  fprintf(f, "\r\n");
+void send_headers(int fd, int status, char *title, char *extra, char *mime, int length, time_t date) {
+	time_t now;
+	char timebuf[128];
+	char strbuf[16*1024];
+	
+	sprintf(strbuf, "%s %d %s\r\n", PROTOCOL, status, title);
+	strwrite(fd, strbuf);
+	sprintf(strbuf, "Server: %s\r\n", SERVER);
+	strwrite(fd, strbuf);
+	now = time(NULL);
+	strftime(timebuf, sizeof(timebuf), RFC1123FMT, gmtime(&now));
+	sprintf(strbuf, "Date: %s\r\n", timebuf);
+	strwrite(fd, strbuf);
+	if (extra) {
+		sprintf(strbuf, "%s\r\n", extra);
+		strwrite(fd, strbuf);
+	}
+	if (mime) {
+		sprintf(strbuf, "Content-Type: %s\r\n", mime);
+		strwrite(fd, strbuf);
+	}
+	if (length >= 0) {
+		sprintf(strbuf, "Content-Length: %d\r\n", length);
+		strwrite(fd, strbuf);
+	}
+	if (date != -1) {
+		strftime(timebuf, sizeof(timebuf), RFC1123FMT, gmtime(&date));
+		sprintf(strbuf, "Last-Modified: %s\r\n", timebuf);
+		strwrite(fd, strbuf);
+	}
+	strwrite(fd, "Connection: close\r\n");
+	strwrite(fd, "\r\n");
 }
 
-void send_error(FILE *f, int status, char *title, char *extra, char *text) {
-  send_headers(f, status, title, extra, "text/html", -1, -1);
-  fprintf(f, "<HTML><HEAD><TITLE>%d %s</TITLE></HEAD>\r\n", status, title);
-  fprintf(f, "<BODY><H4>%d %s</H4>\r\n", status, title);
-  fprintf(f, "%s\r\n", text);
-  fprintf(f, "</BODY></HTML>\r\n");
+void send_error(int fd, int status, char *title, char *extra, char *text) {
+	FILE* f = fdopen(fd, "a+");
+	send_headers(fd, status, title, extra, "text/html", -1, -1);
+	fprintf(f, "<HTML><HEAD><TITLE>%d %s</TITLE></HEAD>\r\n", status, title);
+	fprintf(f, "<BODY><H4>%d %s</H4>\r\n", status, title);
+	fprintf(f, "%s\r\n", text);
+	fprintf(f, "</BODY></HTML>\r\n");
 }
 
 
-int send_file(FILE *f, char *path, struct stat *statbuf) {
-  char data[4096];
-  int n;
+int send_file(int fd, char *path, struct stat *statbuf) {
+	
+	char data[READ_BUF];
+	int n;
 
-  FILE *file = fopen(path, "r");
-  if (!file) {
-    send_error(f, 403, "Forbidden", NULL, "Access denied.");
-    return -403;
-  } else {
-    size_t length = S_ISREG(statbuf->st_mode) ? statbuf->st_size : -1;
-    size_t sent = 0;
-    send_headers(f, 200, "OK", NULL, get_mime_type(path), length, statbuf->st_mtime);
-
-	printf("Sending file to client ... (%ld bytes) \n", length);
-    while ((n = fread(data, sizeof(char), sizeof(data)/sizeof(char), file)) > 0) {
-    	size_t b_sent = fwrite(data, sizeof(char), n, f);
-    	fflush(f);
-    	if(b_sent <= 0) break;
-    	else sent += b_sent;
+	int file_fd = open(path, O_RDONLY);
+	if (file_fd < 0) {
+		send_error(fd, 403, "Forbidden", NULL, "Access denied.");
+		return -403;
+	} else {
+		size_t length = S_ISREG(statbuf->st_mode) ? statbuf->st_size : -1;
+		size_t sent = 0;
+		send_headers(fd, 200, "OK", NULL, get_mime_type(path), length, statbuf->st_mtime);
+		printf("Sending file to client ... (%ld bytes) \n", length);
+		while ((n = read(file_fd, data, sizeof(char) * READ_BUF)) > 0) {
+			size_t b_sent = write(fd, data, sizeof(char) * n);
+			if(b_sent <= 0) break;
+			else sent += b_sent;
     }
-    fclose(file);
+    close(file_fd);
     
     if(sent == length) {
 	    return 0;
@@ -140,8 +154,22 @@ int send_file(FILE *f, char *path, struct stat *statbuf) {
   return -2;
 }
 
+static size_t fdgets(int fd, char* buf, int size) {
+	size_t i = 0;
+	char c;
+	
+	while(i < size) {
+		if (read(fd, &c, 1) <= 0) break;
+		if(c == EOF) break;
+		buf[i++] = c;
+		if (c == '\n') break;
+	}
+	
+	return i;
+}
+
 /* Process a request on the given stream */
-int process(FILE *f) {
+int process(int fd) {
 	char buf[STR_BUF];
 	char *method;
 	char path[STR_BUF];
@@ -151,8 +179,9 @@ int process(FILE *f) {
 	char pathbuf[STR_BUF];
 
 	int len;
-
-	if (!fgets(buf, sizeof(buf), f)) return -1;
+	
+	
+	if (fdgets(fd, buf, sizeof(buf)) <= 0) return -1;
 	printf("GET: %s", buf);
 
 	method = strtok(buf, " ");
@@ -164,35 +193,51 @@ int process(FILE *f) {
 	else
 		snprintf(path, sizeof(path), "%s%s", working_dir, w_path);
 	
-	fseek(f, 0, SEEK_CUR); // Force change of stream direction
+	//fseek(f, 0, SEEK_CUR); // Force change of stream direction
 	if (strcasecmp(method, "GET") != 0) {
-		send_error(f, 501, "Not supported", NULL, "Method is not supported.");
+		send_error(fd, 501, "Not supported", NULL, "Method is not supported.");
 		fprintf(stderr, "Method '%s' not supported \n", method);
 		return -2;
 	} else if (stat(path, &statbuf) < 0) {
-		send_error(f, 404, "Not Found", NULL, "File not found.");
+		send_error(fd, 404, "Not Found", NULL, "File not found.");
 		fprintf(stderr, "File '%s' not found \n", path);
 		return -404;
 	} else if (S_ISDIR(statbuf.st_mode)) {
 		len = strlen(path);
 		if (len == 0 || path[len - 1] != '/') {
 			snprintf(pathbuf, sizeof(pathbuf), "Location: %s/", path);
-			send_error(f, 302, "Found", pathbuf, "Directories must end with a slash.");
+			send_error(fd, 302, "Found", pathbuf, "Directories must end with a slash.");
 		} else {
 			snprintf(pathbuf, sizeof(pathbuf), "%sindex.html", path);
 			if (stat(pathbuf, &statbuf) >= 0) {
-				int res = send_file(f, pathbuf, &statbuf);
+				int res = send_file(fd, pathbuf, &statbuf);
 				if(res != 0) return res;
 			} else {
+				// Remove double slash at end, if so
+				size_t slash = (len-1);
+				while(slash > 0 && path[slash] == '/') {
+					path[slash+1] = '\0';
+					slash--;
+				}
+				
+				char strbuf[STR_BUF];
 				DIR *dir;
 				struct dirent *de;
 
-				send_headers(f, 200, "OK", NULL, "text/html", -1, statbuf.st_mtime);
-				fprintf(f, "<HTML><HEAD><TITLE>Index of %s</TITLE></HEAD>\r\n<BODY>", path);
-				fprintf(f, "<H4>Index of %s</H4>\r\n<PRE>\n", path);
-				fprintf(f, "Name                             Last Modified              Size\r\n");
-				fprintf(f, "<HR>\r\n");
-				if (len > 1) fprintf(f, "<A HREF=\"..\">..</A>\r\n");
+				send_headers(fd, 200, "OK", NULL, "text/html", -1, statbuf.st_mtime);
+				
+				sprintf(strbuf, "<HTML><HEAD><TITLE>Index of %s</TITLE></HEAD>\r\n<BODY>", path);
+				strwrite(fd, strbuf);
+				sprintf(strbuf, "<H4>Index of %s</H4>\r\n<PRE>\n", path);
+				strwrite(fd, strbuf);
+				sprintf(strbuf, "Name                             Last Modified              Size\r\n");
+				strwrite(fd, strbuf);
+				sprintf(strbuf, "<HR>\r\n");
+				strwrite(fd, strbuf);
+				if (len > 1) {
+					sprintf(strbuf, "<A HREF=\"..\">..</A>\r\n");
+					strwrite(fd, strbuf);
+				}
 
 				dir = opendir(path);
 				while ((de = readdir(dir)) != NULL) {
@@ -206,21 +251,29 @@ int process(FILE *f) {
 					tm = gmtime(&statbuf.st_mtime);
 					strftime(timebuf, sizeof(timebuf), "%d-%b-%Y %H:%M:%S", tm);
 
-					fprintf(f, "<A HREF=\"%s%s\">", de->d_name, S_ISDIR(statbuf.st_mode) ? "/" : "");
-					fprintf(f, "%s%s", de->d_name, S_ISDIR(statbuf.st_mode) ? "/</A>" : "</A> ");
-					if (strlen(de->d_name) < 32) fprintf(f, "%*s", 32 - (int)strlen(de->d_name), "");
+					sprintf(strbuf, "<A HREF=\"%s%s\">", de->d_name, S_ISDIR(statbuf.st_mode) ? "/" : "");
+					strwrite(fd, strbuf);
+					sprintf(strbuf, "%s%s", de->d_name, S_ISDIR(statbuf.st_mode) ? "/</A>" : "</A> ");
+					strwrite(fd, strbuf);
+					if (strlen(de->d_name) < 32) {
+						sprintf(strbuf, "%*s", 32 - (int)strlen(de->d_name), "");
+						strwrite(fd, strbuf);
+					}
 					if (S_ISDIR(statbuf.st_mode)) {
-						fprintf(f, "%s\r\n", timebuf);
+						sprintf(strbuf, "%s\r\n", timebuf);
+						strwrite(fd, strbuf);
 					} else {
-						fprintf(f, "%s %10d\r\n", timebuf, (int)statbuf.st_size);
+						sprintf(strbuf, "%s %10d\r\n", timebuf, (int)statbuf.st_size);
+						strwrite(fd, strbuf);
 					}
 				}
 				closedir(dir);
-				fprintf(f, "</PRE>\r\n<HR>\r\n<ADDRESS>%s</ADDRESS>\r\n</BODY></HTML>\r\n", SERVER);
+				sprintf(strbuf, "</PRE>\r\n<HR>\r\n<ADDRESS>%s</ADDRESS>\r\n</BODY></HTML>\r\n", SERVER);
+				strwrite(fd, strbuf);
 				}
 			}
 	} else {
-		send_file(f, path, &statbuf);
+		send_file(fd, path, &statbuf);
 	}
 
 	return 0;
@@ -230,7 +283,6 @@ int process(FILE *f) {
 #if _NANOHTTP_THREADING == 1
 /* Process a socket */
 void process_thread(thread_args *args) {
-	FILE *file;
 	int fd, thread;
 	int res;
 	
@@ -239,9 +291,8 @@ void process_thread(thread_args *args) {
 	free(args);
 	
 	threads[thread] = pthread_self();
-	file = fdopen(fd, "a+");
-    res = process(file);
-    fclose(file);
+    res = process(fd);
+    shutdown(fd, SHUT_RDWR);
     close(fd);
     threads[thread] = 0;
     
@@ -285,7 +336,6 @@ void cleanup(void) {
 		pthread_t pid = threads[i];
 		if(pid <= 0) continue;
 		
-		// pthread_kill(pid, SIGUSR1);
 		pthread_kill(pid, SIGINT);
 	}
 #endif
@@ -437,10 +487,8 @@ int main(int argc, char *argv[]) {
 		}
 #else
 		// Directly process request (single-thread)
-		FILE *file;
-		file = fdopen(s, "a+");
-		process(file);
-		fclose(file);
+		process(s);
+		shutdown(s, SHUT_RDWR);
 		close(s);
 #endif
 	  }
