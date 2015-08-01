@@ -37,12 +37,14 @@ static int port = DEFAULT_PORT;
 static char working_dir[STR_BUF];
 // Server socket
 static int sock;
+// Verbosity flag
+static bool verbose = false;
 
 #if _NANOHTTP_THREADING == 1
-struct {
+typedef struct {
 	int fd;
 	int thread;
-} typedef thread_args;
+} thread_args;
 
 volatile pthread_t threads[THREAD_COUNT];
 #endif
@@ -66,7 +68,7 @@ static char* removeDoubleSlash(char* buf) {
 	return buf;
 }
 
-static size_t fdgets(int fd, char* buf, int size) {
+static size_t fdgets(int fd, char* buf, size_t size) {
 	size_t i = 0;
 	char c;
 	
@@ -85,24 +87,59 @@ static size_t fdgets(int fd, char* buf, int size) {
 static char *get_mime_type(char *name) {
 	char *ext = strrchr(name, '.');
 	if (!ext) return NULL;
+	
 	else if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0) return "text/html";
 	else if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
 	else if (strcmp(ext, ".gif") == 0) return "image/gif";
 	else if (strcmp(ext, ".png") == 0) return "image/png";
+	else if (strcmp(ext, ".bmp") == 0) return "image/bmp";
 	else if (strcmp(ext, ".css") == 0) return "text/css";
+	else if (strcmp(ext, ".js") == 0) return "application/javascript";
 	else if (strcmp(ext, ".au") == 0) return "audio/basic";
 	else if (strcmp(ext, ".wav") == 0) return "audio/wav";
 	else if (strcmp(ext, ".avi") == 0) return "video/x-msvideo";
+	else if (strcmp(ext, ".mp3") == 0) return "audio/mpeg3";
 	else if (strcmp(ext, ".mpeg") == 0 || strcmp(ext, ".mpg") == 0) return "video/mpeg";
 	else if (strcmp(ext, ".txt") == 0) return "text/plain";
 	else if (strcmp(ext, ".xml") == 0) return "text/xml";
 	else if (strcmp(ext, ".c") == 0) return "text/plain";
+	else if (strcmp(ext, ".c++") == 0) return "text/plain";
 	else if (strcmp(ext, ".cpp") == 0) return "text/plain";
+	else if (strcmp(ext, ".cc") == 0) return "text/plain";
 	else if (strcmp(ext, ".h") == 0) return "text/plain";
 	else if (strcmp(ext, ".hpp") == 0) return "text/plain";
+	else if (strcmp(ext, ".h++") == 0) return "text/plain";
 	else if (strcmp(ext, ".py") == 0) return "text/plain";
-	else if (strcmp(ext, ".java") == 0) return "text/plain";
+	else if (strcmp(ext, ".java") == 0) return "text/x-java-source";
+	else if (strcmp(ext, ".class") == 0) return "application/x-java-class";
 	else if (strcmp(ext, ".csv") == 0) return "text/plain";
+	else if (strcmp(ext, ".log") == 0) return "text/plain";
+	else if (strcmp(ext, ".zip") == 0) return "application/zip";
+	else if (strcmp(ext, ".bin") == 0) return "application/octet-stream";
+	else if (strcmp(ext, ".bz") == 0) return "application/x-bzip";
+	else if (strcmp(ext, ".bz2") == 0) return "application/x-bzip2";
+	else if (strcmp(ext, ".crt") == 0) return "application/x-x509-user-cert";
+	else if (strcmp(ext, ".dvi") == 0) return "application/x-dvi";
+	else if (strcmp(ext, ".f77") == 0) return "text/x-fortran";
+	else if (strcmp(ext, ".f90") == 0) return "text/x-fortran";
+	else if (strcmp(ext, ".f") == 0) return "text/x-fortran";
+	else if (strcmp(ext, ".gz") == 0 || strcmp(ext, ".gzip") == 0) return "application/x-gzip";
+	else if (strcmp(ext, ".hdf") == 0) return "application/x-hdf";
+	else if (strcmp(ext, ".hdf5") == 0) return "application/octet-stream";
+	else if (strcmp(ext, ".mid") == 0) return "audio/midi";
+	else if (strcmp(ext, ".mov") == 0) return "video/quicktime";
+	else if (strcmp(ext, ".o") == 0) return "application/octet-stream";
+	else if (strcmp(ext, ".pps") == 0 || strcmp(ext, ".ppt") == 0 || strcmp(ext, ".ppz") == 0)
+	    return "application/powerpoint";
+	else if (strcmp(ext, ".ps") == 0) return "application/postscript";
+	else if (strcmp(ext, ".pyc") == 0) return "application/x-bytecode.python";
+	else if (strcmp(ext, ".rtf") == 0) return "text/richtext";
+	else if (strcmp(ext, ".sh") == 0) return "application/x-sh";
+	else if (strcmp(ext, ".tar") == 0) return "application/x-tar";
+	else if (strcmp(ext, ".tex") == 0) return "application/x-tex";
+	else if (strcmp(ext, ".tgz") == 0) return "application/x-compressed";
+	else if (strcmp(ext, ".xz") == 0) return "application/x-xz";
+	
 	return NULL;
 }
 
@@ -157,8 +194,23 @@ int send_file(int fd, char *path, struct stat *statbuf) {
 
 	int file_fd = open(path, O_RDONLY);
 	if (file_fd < 0) {
-		send_error(fd, 403, "Forbidden", NULL, "Access denied.");
-		return -403;
+	    switch(errno) {
+	    case EACCES:
+	    	send_error(fd, 403, "Forbidden", NULL, "Access denied.");
+    		return -403;
+    	case ENOENT:
+	    	send_error(fd, 404, "Not found", NULL, "404 - Not found");
+    		return -404;
+    	// Linux specific errors
+    	case ENFILE:
+    	case ENOMEM:
+    	    send_error(fd, 500, "Server error", NULL, "Server error.");
+    	    return -500;
+    	default:
+    	    // Default error
+    	    send_error(fd, 500, "Server error", NULL, "Server error.");
+    	    return -500;
+	    }
 	} else {
 		size_t length = S_ISREG(statbuf->st_mode) ? statbuf->st_size : -1;
 		size_t sent = 0;
@@ -331,7 +383,11 @@ static void sig_handler(int signo) {
 	case SIGINT:
 		fprintf(stderr, "SIGINT received\n");
 		exit(EXIT_FAILURE);
-		break;
+		return;
+	case SIGTERM:
+		fprintf(stderr, "SIGTERM received\n");
+		exit(EXIT_FAILURE);
+		return;
 	case SIGUSR1:
 		fprintf(stderr, "SIGUSR1 received\n");
 		exit(EXIT_FAILURE);
@@ -344,10 +400,12 @@ static void sig_handler(int signo) {
 		fprintf(stderr, "SIGALRM received\n");
 		exit(EXIT_FAILURE);
 		break;
+#if 0       // Old debug output
 	case SIGSEGV:
 		fprintf(stderr, "SIGSEGV received\n");
 		exit(EXIT_FAILURE);
 		break;
+#endif
 	}
 }
 
@@ -358,8 +416,8 @@ void cleanup(void) {
 	for(int i=0;i<THREAD_COUNT;i++) {
 		pthread_t pid = threads[i];
 		if(pid <= 0) continue;
-		
-		pthread_kill(pid, SIGINT);
+		else
+		    pthread_kill(pid, SIGINT);
 	}
 #endif
 }
@@ -416,13 +474,17 @@ int main(int argc, char *argv[]) {
 				working_dir[len] = '\0';
 				
 			}
+		} else if(!strcmp("-v", arg) || !strcmp("--verbose", arg) ) {
+		    verbose = false;
+			
 			
 		} else {
-			fprintf(stderr, "WARN: Unknown argument: %s \n", arg);
+			fprintf(stderr, "Error: Unknown argument: %s \n", arg);
+			exit(EXIT_FAILURE);
 		}
 	}
 	
-	// Run as daemon, if needed to
+	// Run as daemon
 	if(daemon == true) {
 		pid_t daemon_pid = fork();
 		if(daemon_pid < 0) {
@@ -458,10 +520,11 @@ int main(int argc, char *argv[]) {
 	
 	// Set signals
 	signal(SIGINT, sig_handler);
+	signal(SIGTERM, sig_handler);
 	signal(SIGUSR1, sig_handler);
 	signal(SIGUSR2, sig_handler);
 	signal(SIGALRM, sig_handler);
-	signal(SIGSEGV, sig_handler);
+	//signal(SIGSEGV, sig_handler);
 	atexit(cleanup);
 	
 #if _NANOHTTP_THREADING == 1
@@ -546,4 +609,6 @@ int main(int argc, char *argv[]) {
   printf("Bye\n");
   return 0;
 }
+
+
 
