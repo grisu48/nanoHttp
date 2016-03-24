@@ -3,8 +3,6 @@
 
 #include <string.h>
 
-
-
 /* ==== GLOBAL DEFINES ====================================================== */
 // Multi-threading on
 #define _NANOHTTP_THREADING 1

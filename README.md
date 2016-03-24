@@ -19,7 +19,10 @@ CROSS-Compile for Android
 Currently tested on my Cyanogenmod-11.0 Android Tablet. Compiled with
 arm-linux-androideabi-gcc
 
-To compile it, modify the Makefile: Replace CC with
+To compile it just run
+  make android
+
+Make sure, the Android-NDK toolchain is installed and available as arm-linux-androideabi-gcc, otherwise modify the Makefile: Replace CC with
   CC=arm-linux-androideabi-gcc
 (see Makefile)
 

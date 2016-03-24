@@ -1,7 +1,7 @@
 //
 // webserver.c
 //
-// Simple HTTP server sample for sanos
+// Very simple and minimalistic http server
 //
 
 #include "nanoHttp.h"
@@ -17,15 +17,17 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <fcntl.h>
 #if _NANOHTTP_THREADING == 1
 #include <pthread.h>
+#include <signal.h>
 #endif
 
 /* ==== GLOBAL SETTINGS ===================================================== */
-#define VERSION "0.3"
+#define VERSION "0.4"
 
 #define SERVER "nanoHttp/1.1"
 #define PROTOCOL "HTTP/1.0"
@@ -39,11 +41,17 @@ static char working_dir[STR_BUF];
 static int sock;
 // Verbosity flag
 static bool verbose = false;
+/** Approximate number of total sent bytes */
+static volatile long bytesSent = 0L;
+/** Approximate number of total received bytes */
+static volatile long bytesReceived = 0L;
 
 #if _NANOHTTP_THREADING == 1
 typedef struct {
 	int fd;
 	int thread;
+	struct sockaddr clientaddr;
+	socklen_t clientaddr_size;
 } thread_args;
 
 volatile pthread_t threads[THREAD_COUNT];
@@ -53,7 +61,9 @@ volatile pthread_t threads[THREAD_COUNT];
 static ssize_t strwrite(int fd, char* str) {
 	size_t len = strlen(str);
 	if(fd < 0 || len <= 0) return 0;
-	return write(fd, str, len);
+	ssize_t ret = write(fd, str, len);
+	if(ret > 0) bytesSent += (long)ret;
+	return ret;
 }
 
 static char* removeDoubleSlash(char* buf) {
@@ -78,6 +88,8 @@ static size_t fdgets(int fd, char* buf, size_t size) {
 		buf[i++] = c;
 		if (c == '\n') break;
 	}
+	
+	if(i > 0) bytesReceived += (long)i;
 	
 	return i;
 }
@@ -215,7 +227,7 @@ int send_file(int fd, char *path, struct stat *statbuf) {
 		size_t length = S_ISREG(statbuf->st_mode) ? statbuf->st_size : -1;
 		size_t sent = 0;
 		send_headers(fd, 200, "OK", NULL, get_mime_type(path), length, statbuf->st_mtime);
-		printf("Sending file to client ... (%ld bytes) \n", length);
+//		printf("Sending file (%ld bytes) ... \n", length);
 		while ((n = read(file_fd, data, sizeof(char) * READ_BUF)) > 0) {
 			size_t b_sent = write(fd, data, sizeof(char) * n);
 			if((int)b_sent < 0) {
@@ -239,11 +251,12 @@ int send_file(int fd, char *path, struct stat *statbuf) {
 	}
   }
   
+  // This should normally never occur
   return -2;
 }
 
-/* Process a request on the given stream */
-int process(int fd) {
+/** Process a request on the given file descriptor */
+int process(int fd, struct sockaddr clientaddr, socklen_t clientaddr_size) {
 	char buf[STR_BUF];
 	char *method;
 	char path[STR_BUF];
@@ -257,7 +270,33 @@ int process(int fd) {
 	
 	if (fdgets(fd, buf, sizeof(buf)) <= 0) return -1;
 	removeDoubleSlash(buf);
-	printf("GET: %s", buf);
+	// Write source address and request path to log
+	printf("[");
+#if 0
+	// Not yet working
+	if(clientaddr_size == sizeof(struct in_addr)) {
+		char str[INET_ADDRSTRLEN];
+		struct sockaddr_in* pV4Addr = (struct sockaddr_in*)&clientaddr;
+		struct in_addr ipAddr = pV4Addr->sin_addr;
+		inet_ntop( AF_INET, &ipAddr, str, INET_ADDRSTRLEN );
+		printf("%s", str);
+	} else if(clientaddr_size == sizeof(struct sockaddr_in6)) {
+		char str[INET6_ADDRSTRLEN];
+		struct sockaddr_in6* pV6Addr = (struct sockaddr_in6*)&clientaddr;
+		struct in6_addr ipAddr = pV6Addr->sin6_addr;
+		inet_ntop( AF_INET6, &ipAddr, str, INET6_ADDRSTRLEN );
+		printf("%s", str);
+	} else {
+		printf("UNKNOWN");
+	}
+#endif
+	if(clientaddr_size >= sizeof(struct sockaddr_in)) {
+		struct sockaddr_in* pV4Addr = (struct sockaddr_in*)&clientaddr;
+		printf("%s:%d", inet_ntoa(pV4Addr->sin_addr), (int) ntohs(pV4Addr->sin_port));
+	} else
+		printf("UNKNOWN");
+	
+	printf("]: %s", buf);
 
 	method = strtok(buf, " ");
 	w_path = strtok(NULL, " ");
@@ -271,11 +310,11 @@ int process(int fd) {
 	//fseek(f, 0, SEEK_CUR); // Force change of stream direction
 	if (strcasecmp(method, "GET") != 0) {
 		send_error(fd, 501, "Not supported", NULL, "Method is not supported.");
-		fprintf(stderr, "Method '%s' not supported \n", method);
+		fprintf(stderr, "(501) Method '%s' not supported \n", method);
 		return -2;
 	} else if (stat(path, &statbuf) < 0) {
 		send_error(fd, 404, "Not Found", NULL, "File not found.");
-		fprintf(stderr, "File '%s' not found \n", path);
+		fprintf(stderr, "(404) File '%s' not found \n", path);
 		return -404;
 	} else if (S_ISDIR(statbuf.st_mode)) {
 		len = strlen(path);
@@ -366,43 +405,55 @@ void process_thread(thread_args *args) {
 	free(args);
 	
 	threads[thread] = pthread_self();
-    res = process(fd);
+    res = process(fd, args->clientaddr, args->clientaddr_size);
+    
     shutdown(fd, SHUT_RDWR);
     close(fd);
     threads[thread] = 0;
     
-    if(res != 0) 
-    	printf("Returned status %d \n", res);
+    if(res < 0) {
+		if(res == -404 || res == -502) {
+			// Ignore since the error message already took place
+		} else
+			printf("Returned status %d \n", res);
+    }
     
 }
 #endif
 
+static void exit_program(const int status) {	
+	printf("Total bytes sent:      %ld (approx)", bytesSent);
+	printf("Total bytes received:  %ld (approx)", bytesReceived);
+	printf("Bye\n");
+	exit(status);
+}
 
 static void sig_handler(int signo) {
 	switch(signo) {
 	case SIGINT:
-		fprintf(stderr, "SIGINT received\n");
-		exit(EXIT_FAILURE);
+		fprintf(stderr, "SIGINT received. Exiting\n");
+		exit_program(EXIT_FAILURE);
 		return;
 	case SIGTERM:
-		fprintf(stderr, "SIGTERM received\n");
-		exit(EXIT_FAILURE);
+		fprintf(stderr, "SIGTERM received. Exiting\n");
+		exit_program(EXIT_FAILURE);
 		return;
 	case SIGUSR1:
-		fprintf(stderr, "SIGUSR1 received\n");
-		exit(EXIT_FAILURE);
+		// Print stats
+		printf("Total bytes sent:      %ld (approx)", bytesSent);
+		printf("Total bytes received:  %ld (approx)", bytesReceived);
 		break;
 	case SIGUSR2:
-		fprintf(stderr, "SIGUSR2 received\n");
+		fprintf(stderr, "SIGUSR2 received. Exiting\n");
 		exit(EXIT_FAILURE);
 		break;
 	case SIGALRM:
-		fprintf(stderr, "SIGALRM received\n");
+		fprintf(stderr, "SIGALRM received. Exiting\n");
 		exit(EXIT_FAILURE);
 		break;
 #if 0       // Old debug output
 	case SIGSEGV:
-		fprintf(stderr, "SIGSEGV received\n");
+		fprintf(stderr, "Segmentation fault\n");
 		exit(EXIT_FAILURE);
 		break;
 #endif
@@ -553,10 +604,12 @@ int main(int argc, char *argv[]) {
   }
   printf("HTTP server listening on port %d\n", port);
 
+  struct sockaddr clientaddr;
+  socklen_t clientaddr_size;
   while (1) {
     int s;
 
-    s = accept(sock, NULL, NULL);
+    s = accept(sock, &clientaddr, &clientaddr_size);
     if (s < 0) {
 		fprintf(stderr, "Error accepting new client: %s \n", strerror(errno));
 		break; 
@@ -585,6 +638,9 @@ int main(int argc, char *argv[]) {
 			// Create Thread
 			args->fd = s;
 			args->thread = x;
+			args->clientaddr_size = clientaddr_size;
+			memcpy(&args->clientaddr, &clientaddr, sizeof(clientaddr));
+			
 			int res = pthread_create(&thread, NULL, (void * (*)(void *))process_thread, args);
 			if(res < 0) {
 				fprintf(stderr, "Error creating thread: %s \n", strerror(errno));
@@ -598,7 +654,7 @@ int main(int argc, char *argv[]) {
 		}
 #else
 		// Directly process request (single-thread)
-		process(s);
+		process(s, clientaddr, clientaddr_size);
 		shutdown(s, SHUT_RDWR);
 		close(s);
 #endif
