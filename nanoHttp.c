@@ -422,8 +422,8 @@ void process_thread(thread_args *args) {
 #endif
 
 static void exit_program(const int status) {	
-	printf("Total bytes sent:      %ld (approx)", bytesSent);
-	printf("Total bytes received:  %ld (approx)", bytesReceived);
+	printf("Total bytes sent:      %ld (approx)\n", bytesSent);
+	printf("Total bytes received:  %ld (approx)\n", bytesReceived);
 	printf("Bye\n");
 	exit(status);
 }
