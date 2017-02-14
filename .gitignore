@@ -24,3 +24,9 @@
 
 # Backup files
 *~
+
+# Executables
+nanoHttp
+nanoHttp_static
+static
+

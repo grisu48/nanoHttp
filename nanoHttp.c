@@ -1,7 +1,7 @@
 //
 // webserver.c
 //
-// Simple HTTP server sample for sanos
+// Very simple and minimalistic http server
 //
 
 #include "nanoHttp.h"
@@ -17,15 +17,17 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <fcntl.h>
 #if _NANOHTTP_THREADING == 1
 #include <pthread.h>
+#include <signal.h>
 #endif
 
 /* ==== GLOBAL SETTINGS ===================================================== */
-#define VERSION "0.3"
+#define VERSION "0.4"
 
 #define SERVER "nanoHttp/1.1"
 #define PROTOCOL "HTTP/1.0"
@@ -37,12 +39,20 @@ static int port = DEFAULT_PORT;
 static char working_dir[STR_BUF];
 // Server socket
 static int sock;
+// Verbosity flag
+static bool verbose = false;
+/** Approximate number of total sent bytes */
+static volatile long bytesSent = 0L;
+/** Approximate number of total received bytes */
+static volatile long bytesReceived = 0L;
 
 #if _NANOHTTP_THREADING == 1
-struct {
+typedef struct {
 	int fd;
 	int thread;
-} typedef thread_args;
+	struct sockaddr clientaddr;
+	socklen_t clientaddr_size;
+} thread_args;
 
 volatile pthread_t threads[THREAD_COUNT];
 #endif
@@ -51,7 +61,9 @@ volatile pthread_t threads[THREAD_COUNT];
 static ssize_t strwrite(int fd, char* str) {
 	size_t len = strlen(str);
 	if(fd < 0 || len <= 0) return 0;
-	return write(fd, str, len);
+	ssize_t ret = write(fd, str, len);
+	if(ret > 0) bytesSent += (long)ret;
+	return ret;
 }
 
 static char* removeDoubleSlash(char* buf) {
@@ -66,7 +78,7 @@ static char* removeDoubleSlash(char* buf) {
 	return buf;
 }
 
-static size_t fdgets(int fd, char* buf, int size) {
+static size_t fdgets(int fd, char* buf, size_t size) {
 	size_t i = 0;
 	char c;
 	
@@ -77,6 +89,8 @@ static size_t fdgets(int fd, char* buf, int size) {
 		if (c == '\n') break;
 	}
 	
+	if(i > 0) bytesReceived += (long)i;
+	
 	return i;
 }
 
@@ -85,25 +99,59 @@ static size_t fdgets(int fd, char* buf, int size) {
 static char *get_mime_type(char *name) {
 	char *ext = strrchr(name, '.');
 	if (!ext) return NULL;
+	
 	else if (strcmp(ext, ".html") == 0 || strcmp(ext, ".htm") == 0) return "text/html";
 	else if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
 	else if (strcmp(ext, ".gif") == 0) return "image/gif";
 	else if (strcmp(ext, ".png") == 0) return "image/png";
 	else if (strcmp(ext, ".bmp") == 0) return "image/bmp";
 	else if (strcmp(ext, ".css") == 0) return "text/css";
+	else if (strcmp(ext, ".js") == 0) return "application/javascript";
 	else if (strcmp(ext, ".au") == 0) return "audio/basic";
 	else if (strcmp(ext, ".wav") == 0) return "audio/wav";
 	else if (strcmp(ext, ".avi") == 0) return "video/x-msvideo";
+	else if (strcmp(ext, ".mp3") == 0) return "audio/mpeg3";
 	else if (strcmp(ext, ".mpeg") == 0 || strcmp(ext, ".mpg") == 0) return "video/mpeg";
 	else if (strcmp(ext, ".txt") == 0) return "text/plain";
 	else if (strcmp(ext, ".xml") == 0) return "text/xml";
 	else if (strcmp(ext, ".c") == 0) return "text/plain";
+	else if (strcmp(ext, ".c++") == 0) return "text/plain";
 	else if (strcmp(ext, ".cpp") == 0) return "text/plain";
+	else if (strcmp(ext, ".cc") == 0) return "text/plain";
 	else if (strcmp(ext, ".h") == 0) return "text/plain";
 	else if (strcmp(ext, ".hpp") == 0) return "text/plain";
+	else if (strcmp(ext, ".h++") == 0) return "text/plain";
 	else if (strcmp(ext, ".py") == 0) return "text/plain";
-	else if (strcmp(ext, ".java") == 0) return "text/plain";
+	else if (strcmp(ext, ".java") == 0) return "text/x-java-source";
+	else if (strcmp(ext, ".class") == 0) return "application/x-java-class";
 	else if (strcmp(ext, ".csv") == 0) return "text/plain";
+	else if (strcmp(ext, ".log") == 0) return "text/plain";
+	else if (strcmp(ext, ".zip") == 0) return "application/zip";
+	else if (strcmp(ext, ".bin") == 0) return "application/octet-stream";
+	else if (strcmp(ext, ".bz") == 0) return "application/x-bzip";
+	else if (strcmp(ext, ".bz2") == 0) return "application/x-bzip2";
+	else if (strcmp(ext, ".crt") == 0) return "application/x-x509-user-cert";
+	else if (strcmp(ext, ".dvi") == 0) return "application/x-dvi";
+	else if (strcmp(ext, ".f77") == 0) return "text/x-fortran";
+	else if (strcmp(ext, ".f90") == 0) return "text/x-fortran";
+	else if (strcmp(ext, ".f") == 0) return "text/x-fortran";
+	else if (strcmp(ext, ".gz") == 0 || strcmp(ext, ".gzip") == 0) return "application/x-gzip";
+	else if (strcmp(ext, ".hdf") == 0) return "application/x-hdf";
+	else if (strcmp(ext, ".hdf5") == 0) return "application/octet-stream";
+	else if (strcmp(ext, ".mid") == 0) return "audio/midi";
+	else if (strcmp(ext, ".mov") == 0) return "video/quicktime";
+	else if (strcmp(ext, ".o") == 0) return "application/octet-stream";
+	else if (strcmp(ext, ".pps") == 0 || strcmp(ext, ".ppt") == 0 || strcmp(ext, ".ppz") == 0)
+	    return "application/powerpoint";
+	else if (strcmp(ext, ".ps") == 0) return "application/postscript";
+	else if (strcmp(ext, ".pyc") == 0) return "application/x-bytecode.python";
+	else if (strcmp(ext, ".rtf") == 0) return "text/richtext";
+	else if (strcmp(ext, ".sh") == 0) return "application/x-sh";
+	else if (strcmp(ext, ".tar") == 0) return "application/x-tar";
+	else if (strcmp(ext, ".tex") == 0) return "application/x-tex";
+	else if (strcmp(ext, ".tgz") == 0) return "application/x-compressed";
+	else if (strcmp(ext, ".xz") == 0) return "application/x-xz";
+	
 	return NULL;
 }
 
@@ -158,13 +206,28 @@ int send_file(int fd, char *path, struct stat *statbuf) {
 
 	int file_fd = open(path, O_RDONLY);
 	if (file_fd < 0) {
-		send_error(fd, 403, "Forbidden", NULL, "Access denied.");
-		return -403;
+	    switch(errno) {
+	    case EACCES:
+	    	send_error(fd, 403, "Forbidden", NULL, "Access denied.");
+    		return -403;
+    	case ENOENT:
+	    	send_error(fd, 404, "Not found", NULL, "404 - Not found");
+    		return -404;
+    	// Linux specific errors
+    	case ENFILE:
+    	case ENOMEM:
+    	    send_error(fd, 500, "Server error", NULL, "Server error.");
+    	    return -500;
+    	default:
+    	    // Default error
+    	    send_error(fd, 500, "Server error", NULL, "Server error.");
+    	    return -500;
+	    }
 	} else {
 		size_t length = S_ISREG(statbuf->st_mode) ? statbuf->st_size : -1;
 		size_t sent = 0;
 		send_headers(fd, 200, "OK", NULL, get_mime_type(path), length, statbuf->st_mtime);
-		printf("Sending file to client ... (%ld bytes) \n", length);
+//		printf("Sending file (%ld bytes) ... \n", length);
 		while ((n = read(file_fd, data, sizeof(char) * READ_BUF)) > 0) {
 			size_t b_sent = write(fd, data, sizeof(char) * n);
 			if((int)b_sent < 0) {
@@ -188,11 +251,12 @@ int send_file(int fd, char *path, struct stat *statbuf) {
 	}
   }
   
+  // This should normally never occur
   return -2;
 }
 
-/* Process a request on the given stream */
-int process(int fd) {
+/** Process a request on the given file descriptor */
+int process(int fd, struct sockaddr clientaddr, socklen_t clientaddr_size) {
 	char buf[STR_BUF];
 	char *method;
 	char path[STR_BUF];
@@ -206,7 +270,33 @@ int process(int fd) {
 	
 	if (fdgets(fd, buf, sizeof(buf)) <= 0) return -1;
 	removeDoubleSlash(buf);
-	printf("GET: %s", buf);
+	// Write source address and request path to log
+	printf("[");
+#if 0
+	// Not yet working
+	if(clientaddr_size == sizeof(struct in_addr)) {
+		char str[INET_ADDRSTRLEN];
+		struct sockaddr_in* pV4Addr = (struct sockaddr_in*)&clientaddr;
+		struct in_addr ipAddr = pV4Addr->sin_addr;
+		inet_ntop( AF_INET, &ipAddr, str, INET_ADDRSTRLEN );
+		printf("%s", str);
+	} else if(clientaddr_size == sizeof(struct sockaddr_in6)) {
+		char str[INET6_ADDRSTRLEN];
+		struct sockaddr_in6* pV6Addr = (struct sockaddr_in6*)&clientaddr;
+		struct in6_addr ipAddr = pV6Addr->sin6_addr;
+		inet_ntop( AF_INET6, &ipAddr, str, INET6_ADDRSTRLEN );
+		printf("%s", str);
+	} else {
+		printf("UNKNOWN");
+	}
+#endif
+	if(clientaddr_size >= sizeof(struct sockaddr_in)) {
+		struct sockaddr_in* pV4Addr = (struct sockaddr_in*)&clientaddr;
+		printf("%s:%d", inet_ntoa(pV4Addr->sin_addr), (int) ntohs(pV4Addr->sin_port));
+	} else
+		printf("UNKNOWN");
+	
+	printf("]: %s", buf);
 
 	method = strtok(buf, " ");
 	w_path = strtok(NULL, " ");
@@ -220,11 +310,11 @@ int process(int fd) {
 	//fseek(f, 0, SEEK_CUR); // Force change of stream direction
 	if (strcasecmp(method, "GET") != 0) {
 		send_error(fd, 501, "Not supported", NULL, "Method is not supported.");
-		fprintf(stderr, "Method '%s' not supported \n", method);
+		fprintf(stderr, "(501) Method '%s' not supported \n", method);
 		return -2;
 	} else if (stat(path, &statbuf) < 0) {
 		send_error(fd, 404, "Not Found", NULL, "File not found.");
-		fprintf(stderr, "File '%s' not found \n", path);
+		fprintf(stderr, "(404) File '%s' not found \n", path);
 		return -404;
 	} else if (S_ISDIR(statbuf.st_mode)) {
 		len = strlen(path);
@@ -315,40 +405,58 @@ void process_thread(thread_args *args) {
 	free(args);
 	
 	threads[thread] = pthread_self();
-    res = process(fd);
+    res = process(fd, args->clientaddr, args->clientaddr_size);
+    
     shutdown(fd, SHUT_RDWR);
     close(fd);
     threads[thread] = 0;
     
-    if(res != 0) 
-    	printf("Returned status %d \n", res);
+    if(res < 0) {
+		if(res == -404 || res == -502) {
+			// Ignore since the error message already took place
+		} else
+			printf("Returned status %d \n", res);
+    }
     
 }
 #endif
 
+static void exit_program(const int status) {	
+	printf("Total bytes sent:      %ld (approx)\n", bytesSent);
+	printf("Total bytes received:  %ld (approx)\n", bytesReceived);
+	printf("Bye\n");
+	exit(status);
+}
 
 static void sig_handler(int signo) {
 	switch(signo) {
 	case SIGINT:
-		fprintf(stderr, "SIGINT received\n");
-		exit(EXIT_FAILURE);
-		break;
+		fprintf(stderr, "SIGINT received. Exiting\n");
+		exit_program(EXIT_FAILURE);
+		return;
+	case SIGTERM:
+		fprintf(stderr, "SIGTERM received. Exiting\n");
+		exit_program(EXIT_FAILURE);
+		return;
 	case SIGUSR1:
-		fprintf(stderr, "SIGUSR1 received\n");
-		exit(EXIT_FAILURE);
+		// Print stats
+		printf("Total bytes sent:      %ld (approx)", bytesSent);
+		printf("Total bytes received:  %ld (approx)", bytesReceived);
 		break;
 	case SIGUSR2:
-		fprintf(stderr, "SIGUSR2 received\n");
+		fprintf(stderr, "SIGUSR2 received. Exiting\n");
 		exit(EXIT_FAILURE);
 		break;
 	case SIGALRM:
-		fprintf(stderr, "SIGALRM received\n");
+		fprintf(stderr, "SIGALRM received. Exiting\n");
 		exit(EXIT_FAILURE);
 		break;
+#if 0       // Old debug output
 	case SIGSEGV:
-		fprintf(stderr, "SIGSEGV received\n");
+		fprintf(stderr, "Segmentation fault\n");
 		exit(EXIT_FAILURE);
 		break;
+#endif
 	}
 }
 
@@ -359,8 +467,8 @@ void cleanup(void) {
 	for(int i=0;i<THREAD_COUNT;i++) {
 		pthread_t pid = threads[i];
 		if(pid <= 0) continue;
-		
-		pthread_kill(pid, SIGINT);
+		else
+		    pthread_kill(pid, SIGINT);
 	}
 #endif
 }
@@ -417,13 +525,17 @@ int main(int argc, char *argv[]) {
 				working_dir[len] = '\0';
 				
 			}
+		} else if(!strcmp("-v", arg) || !strcmp("--verbose", arg) ) {
+		    verbose = false;
+			
 			
 		} else {
-			fprintf(stderr, "WARN: Unknown argument: %s \n", arg);
+			fprintf(stderr, "Error: Unknown argument: %s \n", arg);
+			exit(EXIT_FAILURE);
 		}
 	}
 	
-	// Run as daemon, if needed to
+	// Run as daemon
 	if(daemon == true) {
 		pid_t daemon_pid = fork();
 		if(daemon_pid < 0) {
@@ -459,10 +571,11 @@ int main(int argc, char *argv[]) {
 	
 	// Set signals
 	signal(SIGINT, sig_handler);
+	signal(SIGTERM, sig_handler);
 	signal(SIGUSR1, sig_handler);
 	signal(SIGUSR2, sig_handler);
 	signal(SIGALRM, sig_handler);
-	signal(SIGSEGV, sig_handler);
+	//signal(SIGSEGV, sig_handler);
 	atexit(cleanup);
 	
 #if _NANOHTTP_THREADING == 1
@@ -491,10 +604,12 @@ int main(int argc, char *argv[]) {
   }
   printf("HTTP server listening on port %d\n", port);
 
+  struct sockaddr clientaddr;
+  socklen_t clientaddr_size;
   while (1) {
     int s;
 
-    s = accept(sock, NULL, NULL);
+    s = accept(sock, &clientaddr, &clientaddr_size);
     if (s < 0) {
 		fprintf(stderr, "Error accepting new client: %s \n", strerror(errno));
 		break; 
@@ -523,6 +638,9 @@ int main(int argc, char *argv[]) {
 			// Create Thread
 			args->fd = s;
 			args->thread = x;
+			args->clientaddr_size = clientaddr_size;
+			memcpy(&args->clientaddr, &clientaddr, sizeof(clientaddr));
+			
 			int res = pthread_create(&thread, NULL, (void * (*)(void *))process_thread, args);
 			if(res < 0) {
 				fprintf(stderr, "Error creating thread: %s \n", strerror(errno));
@@ -536,7 +654,7 @@ int main(int argc, char *argv[]) {
 		}
 #else
 		// Directly process request (single-thread)
-		process(s);
+		process(s, clientaddr, clientaddr_size);
 		shutdown(s, SHUT_RDWR);
 		close(s);
 #endif
@@ -547,4 +665,6 @@ int main(int argc, char *argv[]) {
   printf("Bye\n");
   return 0;
 }
+
+
 
