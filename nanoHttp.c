@@ -89,6 +89,7 @@ static char *get_mime_type(char *name) {
 	else if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
 	else if (strcmp(ext, ".gif") == 0) return "image/gif";
 	else if (strcmp(ext, ".png") == 0) return "image/png";
+	else if (strcmp(ext, ".bmp") == 0) return "image/bmp";
 	else if (strcmp(ext, ".css") == 0) return "text/css";
 	else if (strcmp(ext, ".au") == 0) return "audio/basic";
 	else if (strcmp(ext, ".wav") == 0) return "audio/wav";

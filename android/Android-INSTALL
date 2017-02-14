@@ -4,15 +4,14 @@
 DISCLAIMER
 
 This is an advanced tool for experienced Android users.
-I consider it as a software experiment. Please do NOT use this program in a productive system!
-
+I consider it as a software experiment as is provided as-is. Note that there
+is no warranty whatsover.
 
 
 What you need
 -------------
 
-- Android device
-- Rooted (The device must be rooted)
+- Rooted android device
 - ADB bridge
 - Knowledge about a shell and the Android system
 
