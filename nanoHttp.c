@@ -190,12 +190,15 @@ void send_headers(int fd, int status, char *title, char *extra, char *mime, int 
 }
 
 void send_error(int fd, int status, char *title, char *extra, char *text) {
-	FILE* f = fdopen(fd, "a+");
 	send_headers(fd, status, title, extra, "text/html", -1, -1);
-	fprintf(f, "<HTML><HEAD><TITLE>%d %s</TITLE></HEAD>\r\n", status, title);
-	fprintf(f, "<BODY><H4>%d %s</H4>\r\n", status, title);
-	fprintf(f, "%s\r\n", text);
-	fprintf(f, "</BODY></HTML>\r\n");
+
+	FILE* f = fdopen(fd, "a+");
+	if(f!=NULL) {	
+		fprintf(f, "<HTML><HEAD><TITLE>%d %s</TITLE></HEAD>\r\n", status, title);
+		fprintf(f, "<BODY><H4>%d %s</H4>\r\n", status, title);
+		fprintf(f, "%s\r\n", text);
+		fprintf(f, "</BODY></HTML>\r\n");
+	}
 }
 
 
@@ -500,7 +503,7 @@ int main(int argc, char *argv[]) {
 			printf("\t-D  --daemon        Run as daemon (fork)\n");
 			printf("\t-p  --port PORT     Define port\n");
 			printf("\t-w  --cwd PATH      Define working directory\n");
-			printf("\n2014, Felix Niederwanger\n");
+			printf("\n2018, Felix Niederwanger\n");
 			
 			
 			return EXIT_SUCCESS;
