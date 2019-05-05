@@ -1,6 +1,8 @@
 nanoHttp
 ========
 
+[![Build Status](https://travis-ci.org/grisu48/nanoHttp.svg?branch=master)](https://travis-ci.org/grisu48/nanoHttp)
+
 Really simple, small HTTP server.
 Designed to act as a primitive HTTP server on my android devices.
 
