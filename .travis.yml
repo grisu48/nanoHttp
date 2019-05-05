@@ -1,0 +1,12 @@
+branches:
+        only:
+                - master
+
+dist:
+        - xenial
+
+language: c++
+compiler:
+        - gcc
+
+script: make
